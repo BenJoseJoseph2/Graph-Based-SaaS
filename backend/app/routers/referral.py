@@ -19,7 +19,7 @@ def _log_cycle_fraud(db: Session, new_user_id: str, referrer_id: str) -> FraudFl
         user_id=new_user_id,
         attempted_referrer_id=referrer_id,
         reason=FraudReason.cycle,
-        details=f"Attempted referral would create a cycle: {new_user_id} → {referrer_id}",
+        details=f"Attempted referral would create a cycle: {new_user_id} -> {referrer_id}",
     )
     db.add(flag)
     db.add(ActivityEvent(
@@ -53,6 +53,14 @@ async def claim_referral(payload: ReferralClaimRequest, db: Session = Depends(ge
     # ── Fraud checks (self, duplicate, velocity) ───────────────────────────
     is_fraud, reason_msg, fraud_flag = run_fraud_checks(db, payload.new_user_id, referrer_id)
     if is_fraud:
+        # Store a rejected referral record so rejected_referrals metric is accurate
+        db.add(Referral(
+            id=str(uuid.uuid4()),
+            referred_id=payload.new_user_id,
+            referrer_id=referrer_id,
+            status=ReferralStatus.rejected,
+            is_primary=False,
+        ))
         db.commit()
         await manager.broadcast("fraud_detected", {
             "user_id": payload.new_user_id,
@@ -67,6 +75,14 @@ async def claim_referral(payload: ReferralClaimRequest, db: Session = Depends(ge
     # ── Cycle detection ────────────────────────────────────────────────────
     if would_create_cycle(db, payload.new_user_id, referrer_id):
         flag = _log_cycle_fraud(db, payload.new_user_id, referrer_id)
+        # Store a rejected referral record so rejected_referrals metric is accurate
+        db.add(Referral(
+            id=str(uuid.uuid4()),
+            referred_id=payload.new_user_id,
+            referrer_id=referrer_id,
+            status=ReferralStatus.rejected,
+            is_primary=False,
+        ))
         db.commit()
         await manager.broadcast("cycle_prevented", {
             "new_user_id": payload.new_user_id,
